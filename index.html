@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Debtor Management</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
   :root {
     --bg:#f4f6fa; --card:#fff; --text:#1c2333; --muted:#6b7280; --border:#e3e7ee;
@@ -83,7 +84,7 @@
     <button data-v="collect">Record Collection</button>
     <button data-v="data">Backup</button>
   </nav>
-  <button class="btn sec" id="logout">Sign out</button>
+  <div style="display:flex;gap:12px;align-items:center"><span id="saveStatus" class="note" style="margin:0"></span><button class="btn sec" id="logout">Sign out</button></div>
 </header>
 <main>
 
@@ -170,7 +171,7 @@
 <section id="v-data" class="hide">
   <div class="panel">
     <h2>Backup &amp; export</h2>
-    <p class="note">Data is saved in this browser only (PDFs included). Download a backup regularly.</p>
+    <p class="note" id="bkNote">Data is saved in this browser only (PDFs included). Download a backup regularly.</p>
     <p><button class="btn" id="bkJson">Download backup (JSON)</button> <button class="btn sec" id="bkCsv">Export debtor balances (CSV)</button>
     <button class="btn sec" id="bkInv">Export invoices (CSV)</button></p>
     <p><label>Restore from backup (replaces current data; PDFs are not included in the backup)</label><input type="file" id="restore" accept=".json"></p>
@@ -190,18 +191,64 @@
 <script>
 /* ---------- storage ---------- */
 const KEY = 'debtor-system-v1';
+/* Cloud mode: fill these two values from Supabase (Project Settings -> API). The anon key is safe to be public;
+   your data is protected by the login + row-level security rules in supabase-setup.sql.
+   Leave both empty to run in local-only mode (data stays in this browser). */
+const SUPABASE_URL = 'https://bibjewcqdvoolubufwdp.supabase.co', SUPABASE_ANON_KEY = 'sb_publishable_u9mtjnfd04-v6hQG68EErw_0G5liM7U';
+const CLOUD = !!(SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase);
+const sb = CLOUD ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+let cloudUid = null, cloudVersion = 0, saveChain = Promise.resolve();
+
 let db = { invoices: [], collections: [] };
-try { const s = localStorage.getItem(KEY); if (s) db = JSON.parse(s); } catch (e) {}
-const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { alert('Could not save data in this browser. Open the file normally (not in a preview) and download backups.'); } };
+if (!CLOUD) try { const s = localStorage.getItem(KEY); if (s) db = JSON.parse(s); } catch (e) {}
+const setStatus = (t, bad) => { const el = document.getElementById('saveStatus'); if (el) { el.textContent = t; el.style.color = bad ? 'var(--bad)' : ''; } };
+function save() {
+  if (CLOUD) { saveChain = saveChain.then(cloudSave); return; }
+  try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { alert('Could not save data in this browser. Open the file normally (not in a preview) and download backups.'); }
+}
+async function cloudSave() {
+  if (!cloudUid) return;
+  setStatus('Saving…');
+  try {
+    const { data, error } = await sb.from('app_data').update({ data: db, version: cloudVersion + 1, updated_at: new Date().toISOString() })
+      .eq('user_id', cloudUid).eq('version', cloudVersion).select('version');
+    if (error) throw error;
+    if (!data.length) { alert('Your data was changed on another device or tab, so this last change was not saved. The latest data will now be loaded.'); await cloudLoad(); render(); setStatus('Reloaded latest'); return; }
+    cloudVersion++; setStatus('Saved ✓');
+  } catch (e) { setStatus('Save failed – ' + (e.message || e), true); }
+}
+async function cloudLoad() {
+  const { data, error } = await sb.from('app_data').select('data,version').eq('user_id', cloudUid).maybeSingle();
+  if (error) throw error;
+  if (data) { db = data.data || {}; db.invoices ||= []; db.collections ||= []; cloudVersion = data.version; setStatus('Saved ✓'); return; }
+  const ins = await sb.from('app_data').insert({ user_id: cloudUid, data: { invoices: [], collections: [] }, version: 1 });
+  if (ins.error) throw ins.error;
+  db = { invoices: [], collections: [] }; cloudVersion = 1;
+  await offerLocalMigration();
+}
+// First cloud login: offer to move records (and PDFs) previously saved in this browser.
+async function offerLocalMigration() {
+  let local; try { local = JSON.parse(localStorage.getItem(KEY)); } catch {}
+  if (!local || !local.invoices || !(local.invoices.length || local.collections.length)) return;
+  if (!confirm(`Found ${local.invoices.length} invoice(s) saved in this browser. Upload them to your cloud account?`)) return;
+  db = local; save(); await saveChain;
+  for (const i of db.invoices.filter(i => i.hasPdf)) { try { const b = await localPdfs.get(i.id); if (b) await cloudPdfs.put(i.id, b); } catch (e) { console.warn('PDF upload failed', i.no, e); } }
+}
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 // PDFs live in IndexedDB (too big for localStorage)
-const pdfStore = {
+const localPdfs = {
   open: () => new Promise((res, rej) => { const r = indexedDB.open('debtor-pdfs', 1); r.onupgradeneeded = () => r.result.createObjectStore('f'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }),
   async put(id, blob) { const d = await this.open(); return new Promise((res, rej) => { const t = d.transaction('f', 'readwrite'); t.objectStore('f').put(blob, id); t.oncomplete = res; t.onerror = () => rej(t.error); }); },
   async get(id) { const d = await this.open(); return new Promise((res, rej) => { const q = d.transaction('f').objectStore('f').get(id); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); },
   async del(id) { const d = await this.open(); return new Promise(res => { const t = d.transaction('f', 'readwrite'); t.objectStore('f').delete(id); t.oncomplete = res; }); }
 };
+const cloudPdfs = {
+  async put(id, blob) { const { error } = await sb.storage.from('pdfs').upload(`${cloudUid}/${id}.pdf`, blob, { contentType: 'application/pdf', upsert: true }); if (error) throw error; },
+  async get(id) { const { data, error } = await sb.storage.from('pdfs').download(`${cloudUid}/${id}.pdf`); return error ? null : data; },
+  async del(id) { await sb.storage.from('pdfs').remove([`${cloudUid}/${id}.pdf`]); }
+};
+const pdfStore = { put: (...a) => (CLOUD ? cloudPdfs : localPdfs).put(...a), get: (...a) => (CLOUD ? cloudPdfs : localPdfs).get(...a), del: (...a) => (CLOUD ? cloudPdfs : localPdfs).del(...a) };
 
 /* ---------- helpers ---------- */
 const $ = id => document.getElementById(id);
@@ -308,7 +355,7 @@ function invTable(list, showDebtor = true) {
 function bindInvTable(root) {
   root.onclick = async e => {
     const p = e.target.dataset.pdf, d = e.target.dataset.del;
-    if (p) { const b = await pdfStore.get(p); if (b) window.open(URL.createObjectURL(b), '_blank'); else alert('PDF not found in this browser.'); }
+    if (p) { const w = window.open('', '_blank'); const b = await pdfStore.get(p); if (b) w.location = URL.createObjectURL(b); else { w.close(); alert('PDF file not found.'); } }
     if (d && confirm('Delete this invoice? Payments applied to it become unapplied credit.')) {
       db.collections.forEach(c => c.alloc = c.alloc.filter(a => a.inv !== d));
       db.invoices = db.invoices.filter(i => i.id !== d); pdfStore.del(d); save(); render();
@@ -525,7 +572,7 @@ $('invForm').onsubmit = async e => {
   if (existing && !confirm(`Invoice ${no} already exists for ${debtor}. Add anyway?`)) return;
   const known = debtorsList().find(d => key(d.name) === key(debtor));
   const inv = { id: uid(), debtor: known ? known.name : debtor, no, date: $('iDate').value, due: $('iDue').value, amount: r2(+$('iAmt').value), hasPdf: !!curFile, items: curItems.filter(i => i.desc.trim() || +i.amt).map(i => ({ desc: i.desc.trim(), qty: String(i.qty).trim(), price: String(i.price).trim(), amt: r2(parseFloat(String(i.amt).replace(/,/g, '')) || 0) })) };
-  if (curFile) await pdfStore.put(inv.id, curFile);
+  if (curFile) { try { await pdfStore.put(inv.id, curFile); } catch (err) { if (!confirm('The PDF could not be stored (' + (err.message || err) + '). Save the invoice without the PDF?')) return; inv.hasPdf = false; } }
   db.invoices.push(inv); save();
   resetInvForm();
   await nextFile(); render();
@@ -597,6 +644,14 @@ async function hashPw(pw, saltHex) {
 const newSalt = () => toHex(crypto.getRandomValues(new Uint8Array(16)));
 const unlocked = () => { try { return sessionStorage.getItem(SESSION_KEY) === '1'; } catch { return false; } };
 function showLogin() {
+  if (CLOUD) {
+    document.body.classList.add('locked');
+    $('loginSub').textContent = 'Sign in to your account';
+    document.querySelector('label[for=lUser]').textContent = 'Email'; $('lUser').type = 'email';
+    $('loginBtn').textContent = 'Sign in'; $('lConfWrap').classList.add('hide'); $('lConf').required = false;
+    $('forgot').classList.add('hide'); $('loginMsg').textContent = '';
+    return;
+  }
   const setup = !getAuth();
   document.body.classList.add('locked');
   $('loginSub').textContent = setup ? 'First time here: create your username and password' : 'Sign in to continue';
@@ -607,8 +662,22 @@ function showLogin() {
   $('loginMsg').textContent = window.crypto && crypto.subtle ? '' : 'This browser cannot run secure login. Open the app over https or in Chrome/Edge.';
 }
 function unlock() { try { sessionStorage.setItem(SESSION_KEY, '1'); } catch {} document.body.classList.remove('locked'); $('lPass').value = $('lConf').value = ''; render(); }
+async function cloudSignIn() {
+  const msg = $('loginMsg'); msg.textContent = ''; $('loginBtn').disabled = true;
+  try {
+    const { data, error } = await sb.auth.signInWithPassword({ email: $('lUser').value.trim(), password: $('lPass').value });
+    if (error) throw error;
+    await openCloudSession(data.user.id);
+  } catch (e) { msg.textContent = e.message || 'Sign in failed.'; $('lPass').value = ''; }
+  $('loginBtn').disabled = false;
+}
+async function openCloudSession(uid) {
+  cloudUid = uid; await cloudLoad();
+  document.body.classList.remove('locked'); $('lPass').value = ''; go('dash');
+}
 $('loginForm').onsubmit = async e => {
-  e.preventDefault(); const msg = $('loginMsg'); msg.textContent = '';
+  e.preventDefault(); if (CLOUD) return cloudSignIn();
+  const msg = $('loginMsg'); msg.textContent = '';
   if (!(window.crypto && crypto.subtle)) return showLogin();
   const user = $('lUser').value.trim(), pw = $('lPass').value, a = getAuth();
   if (!a) {
@@ -621,7 +690,11 @@ $('loginForm').onsubmit = async e => {
   if (user.toLowerCase() === a.user.toLowerCase() && await hashPw(pw, a.salt) === a.hash) return unlock();
   msg.textContent = 'Wrong username or password.'; $('lPass').value = '';
 };
-$('logout').onclick = () => { try { sessionStorage.removeItem(SESSION_KEY); } catch {} go('dash'); showLogin(); };
+$('logout').onclick = async () => {
+  if (CLOUD) { await saveChain; try { await sb.auth.signOut(); } catch {} db = { invoices: [], collections: [] }; cloudUid = null; setStatus(''); }
+  else try { sessionStorage.removeItem(SESSION_KEY); } catch {}
+  go('dash'); showLogin();
+};
 $('forgot').onclick = () => {
   if (!confirm('There is no way to recover a forgotten password. Resetting it ERASES ALL invoices and collections in this browser (unless you saved a backup file). Continue?')) return;
   if (!confirm('Last check: erase all data and reset the login?')) return;
@@ -630,13 +703,28 @@ $('forgot').onclick = () => {
 };
 $('pwForm').onsubmit = async e => {
   e.preventDefault(); const a = getAuth(), m = $('pwMsg');
+  if (CLOUD) {
+    const { data: u } = await sb.auth.getUser();
+    const chk = await sb.auth.signInWithPassword({ email: u.user.email, password: $('pwOld').value });
+    if (chk.error) return m.textContent = 'Current password is wrong.';
+    const up = await sb.auth.updateUser({ password: $('pwNew').value });
+    if (up.error) return m.textContent = up.error.message;
+    $('pwForm').reset(); return m.textContent = 'Password changed.';
+  }
   if (!a || await hashPw($('pwOld').value, a.salt) !== a.hash) return m.textContent = 'Current password is wrong.';
   const salt = newSalt(); localStorage.setItem(AUTH_KEY, JSON.stringify({ user: a.user, salt, hash: await hashPw($('pwNew').value, salt) }));
   $('pwForm').reset(); m.textContent = 'Password changed.';
 };
 
+if (CLOUD) $('bkNote').textContent = 'Your data is stored in your cloud account and is available on any device after you sign in. A backup file is still a good safety copy (PDFs are not included in it).';
 render();
-if (unlocked() && getAuth()) document.body.classList.remove('locked'); else showLogin();
+(async () => {
+  if (CLOUD) {
+    try { const { data: { session } } = await sb.auth.getSession(); if (session) return await openCloudSession(session.user.id); } catch (e) { console.warn(e); }
+    return showLogin();
+  }
+  if (unlocked() && getAuth()) document.body.classList.remove('locked'); else showLogin();
+})();
 </script>
 </body>
 </html>
