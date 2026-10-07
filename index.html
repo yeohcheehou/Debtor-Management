@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Debtor Management</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  :root {
+    --bg:#f4f6fa; --card:#fff; --text:#1c2333; --muted:#6b7280; --border:#e3e7ee;
+    --primary:#2563eb; --ok:#16a34a; --warn:#d97706; --bad:#dc2626; --soft:#eef2ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151c; --card:#1b1f2a; --text:#e8ebf2; --muted:#9aa3b5; --border:#2c3342; --soft:#222a40; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; padding:14px 24px; background:var(--card); border-bottom:1px solid var(--border); position:sticky; top:0; z-index:5; }
+  h1 { font-size:20px; margin:0; }
+  h2 { font-size:16px; margin:0 0 12px; }
+  nav { display:flex; gap:4px; flex-wrap:wrap; }
+  nav button { background:none; border:0; padding:8px 14px; border-radius:8px; color:var(--muted); font-size:14px; cursor:pointer; }
+  nav button.on { background:var(--soft); color:var(--primary); font-weight:600; }
+  main { max-width:1200px; margin:0 auto; padding:20px 16px 60px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; margin-bottom:16px; }
+  .card, .panel { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }
+  .panel { margin-bottom:16px; overflow-x:auto; }
+  .card .label { color:var(--muted); font-size:13px; }
+  .card .value { font-size:24px; font-weight:700; margin-top:4px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:800px){ .grid2 { grid-template-columns:1fr; } }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { padding:8px 10px; text-align:left; border-bottom:1px solid var(--border); white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.03em; }
+  td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; }
+  tr.click { cursor:pointer; } tr.click:hover { background:var(--soft); }
+  label { display:block; font-size:13px; color:var(--muted); margin-bottom:4px; }
+  input, select, textarea { width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); font:inherit; }
+  .form { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; align-items:end; }
+  button.btn { background:var(--primary); color:#fff; border:0; padding:9px 16px; border-radius:8px; font:inherit; cursor:pointer; }
+  button.btn.sec { background:var(--soft); color:var(--primary); }
+  button.btn.del { background:none; color:var(--bad); padding:4px 8px; }
+  button.link { background:none; border:0; color:var(--primary); cursor:pointer; padding:0; font:inherit; }
+  .tag { display:inline-block; padding:2px 8px; border-radius:99px; font-size:12px; font-weight:600; }
+  .t-ok { background:#dcfce7; color:#166534; } .t-warn { background:#fef3c7; color:#92400e; } .t-bad { background:#fee2e2; color:#991b1b; }
+  .drop { border:2px dashed var(--border); border-radius:10px; padding:22px; text-align:center; color:var(--muted); cursor:pointer; }
+  .drop.over { border-color:var(--primary); background:var(--soft); }
+  .bar { display:flex; height:22px; border-radius:6px; overflow:hidden; background:var(--border); margin:8px 0; }
+  .legend { display:flex; gap:14px; flex-wrap:wrap; font-size:13px; color:var(--muted); }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; }
+  .note { font-size:13px; color:var(--muted); margin:8px 0 0; }
+  .bad { color:var(--bad); } .ok { color:var(--ok); }
+  .hide { display:none; }
+  .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+  .toolbar input { max-width:260px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Debtor Management</h1>
+  <nav id="nav">
+    <button data-v="dash" class="on">Dashboard</button>
+    <button data-v="debtors">Debtors</button>
+    <button data-v="invoices">Invoices</button>
+    <button data-v="collect">Record Collection</button>
+    <button data-v="data">Backup</button>
+  </nav>
+</header>
+<main>
+
+<!-- DASHBOARD -->
+<section id="v-dash">
+  <div class="cards" id="kpis"></div>
+  <div class="panel">
+    <h2>Ageing of outstanding invoices</h2>
+    <div class="bar" id="ageBar"></div>
+    <div class="legend" id="ageLegend"></div>
+  </div>
+  <div class="panel">
+    <h2>Debtors by balance</h2>
+    <table><thead><tr><th>Debtor</th><th class="n">Invoiced</th><th class="n">Collected</th><th class="n">Balance</th><th class="n">Overdue</th></tr></thead><tbody id="topDebtors"></tbody></table>
+  </div>
+</section>
+
+<!-- DEBTORS -->
+<section id="v-debtors" class="hide">
+  <div id="debtorList">
+    <div class="toolbar"><input id="dSearch" placeholder="Search debtor…"><label style="margin:0"><input type="checkbox" id="dOpenOnly" style="width:auto" checked> only with balance</label></div>
+    <div class="panel"><table><thead><tr><th>Debtor</th><th class="n">Invoiced</th><th class="n">Collected</th><th class="n">Balance</th><th class="n">Overdue</th><th class="n">Open inv.</th></tr></thead><tbody id="debtorRows"></tbody></table></div>
+  </div>
+  <div id="debtorDetail" class="hide"></div>
+</section>
+
+<!-- INVOICES -->
+<section id="v-invoices" class="hide">
+  <div class="panel">
+    <h2>Add invoice</h2>
+    <div class="drop" id="drop">Drop PDF invoice(s) here or click to choose — fields are pre-filled where readable, you confirm before saving.<input type="file" id="pdfIn" accept="application/pdf" multiple hidden></div>
+    <p class="note" id="queueNote"></p>
+    <form id="invForm" class="form" style="margin-top:12px">
+      <div><label>Debtor</label><input id="iDebtor" list="debtorNames" required></div>
+      <div><label>Invoice no.</label><input id="iNo" required></div>
+      <div><label>Invoice date</label><input id="iDate" type="date" required></div>
+      <div><label>Credit terms (days)</label><input id="iTerms" type="number" min="0" value="30"></div>
+      <div><label>Due date</label><input id="iDue" type="date" required></div>
+      <div><label>Amount</label><input id="iAmt" type="number" step="0.01" min="0.01" required></div>
+      <div><label>Attached PDF</label><input id="iFile" disabled value="(none – manual entry)"></div>
+      <div style="grid-column:1/-1">
+        <label>Items billed <span id="itemsTotal" class="note"></span></label>
+        <table><thead><tr><th>Description</th><th class="n">Qty</th><th class="n">Unit price</th><th class="n">Amount</th><th></th></tr></thead><tbody id="itemRows"></tbody></table>
+        <button type="button" class="btn sec" id="addItem" style="margin-top:8px">+ Add item</button>
+        <button type="button" class="btn sec" id="useTotal" style="margin-top:8px">Set invoice amount = items total</button>
+        <details style="margin-top:8px"><summary class="note" style="cursor:pointer">Show text read from PDF</summary><pre id="rawText" style="white-space:pre-wrap;font-size:12px;max-height:240px;overflow:auto"></pre></details>
+      </div>
+      <div><button class="btn">Save invoice</button> <button type="button" class="btn sec" id="iSkip">Skip / clear</button></div>
+    </form>
+    <datalist id="debtorNames"></datalist>
+  </div>
+  <div class="panel">
+    <div class="toolbar"><h2 style="margin:0">All invoices</h2><input id="iSearch" placeholder="Search invoice / debtor…">
+      <select id="iFilter" style="max-width:160px"><option value="all">All</option><option value="open">Outstanding</option><option value="overdue">Overdue</option><option value="paid">Paid</option></select></div>
+    <div id="invTable"></div>
+  </div>
+</section>
+
+<!-- COLLECT -->
+<section id="v-collect" class="hide">
+  <div class="panel">
+    <h2>Record a collection (payment received)</h2>
+    <form id="colForm">
+      <div class="form">
+        <div><label>Debtor</label><select id="cDebtor" required></select></div>
+        <div><label>Date received</label><input id="cDate" type="date" required></div>
+        <div><label>Amount received</label><input id="cAmt" type="number" step="0.01" min="0.01" required></div>
+        <div><label>Method</label><select id="cMethod"><option>Bank transfer</option><option>Cheque</option><option>Cash</option><option>Online / eWallet</option><option>Other</option></select></div>
+        <div><label>Reference / cheque no.</label><input id="cRef"></div>
+      </div>
+      <h2 style="margin-top:16px">Apply to invoices</h2>
+      <table><thead><tr><th>Invoice</th><th>Due</th><th class="n">Outstanding</th><th class="n">Apply</th></tr></thead><tbody id="allocRows"><tr><td colspan="4" class="note">Choose a debtor.</td></tr></tbody></table>
+      <p class="note" id="allocNote">Amount is auto-applied to the oldest invoices first. You can edit the "Apply" column.</p>
+      <button class="btn">Save collection</button>
+    </form>
+  </div>
+  <div class="panel">
+    <h2>Recent collections</h2>
+    <table><thead><tr><th>Date</th><th>Debtor</th><th>Method</th><th>Ref</th><th class="n">Amount</th><th>Applied to</th><th></th></tr></thead><tbody id="colRows"></tbody></table>
+  </div>
+</section>
+
+<!-- BACKUP -->
+<section id="v-data" class="hide">
+  <div class="panel">
+    <h2>Backup &amp; export</h2>
+    <p class="note">Data is saved in this browser only (PDFs included). Download a backup regularly.</p>
+    <p><button class="btn" id="bkJson">Download backup (JSON)</button> <button class="btn sec" id="bkCsv">Export debtor balances (CSV)</button>
+    <button class="btn sec" id="bkInv">Export invoices (CSV)</button></p>
+    <p><label>Restore from backup (replaces current data; PDFs are not included in the backup)</label><input type="file" id="restore" accept=".json"></p>
+  </div>
+</section>
+</main>
+
+<script>
+/* ---------- storage ---------- */
+const KEY = 'debtor-system-v1';
+let db = { invoices: [], collections: [] };
+try { const s = localStorage.getItem(KEY); if (s) db = JSON.parse(s); } catch (e) {}
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { alert('Could not save data in this browser. Open the file normally (not in a preview) and download backups.'); } };
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+// PDFs live in IndexedDB (too big for localStorage)
+const pdfStore = {
+  open: () => new Promise((res, rej) => { const r = indexedDB.open('debtor-pdfs', 1); r.onupgradeneeded = () => r.result.createObjectStore('f'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }),
+  async put(id, blob) { const d = await this.open(); return new Promise((res, rej) => { const t = d.transaction('f', 'readwrite'); t.objectStore('f').put(blob, id); t.oncomplete = res; t.onerror = () => rej(t.error); }); },
+  async get(id) { const d = await this.open(); return new Promise((res, rej) => { const q = d.transaction('f').objectStore('f').get(id); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); },
+  async del(id) { const d = await this.open(); return new Promise(res => { const t = d.transaction('f', 'readwrite'); t.objectStore('f').delete(id); t.oncomplete = res; }); }
+};
+
+/* ---------- helpers ---------- */
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = n => (n < 0 ? '-' : '') + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const today = () => new Date().toISOString().slice(0, 10);
+const addDays = (d, n) => { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
+const daysBetween = (a, b) => Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 864e5);
+const r2 = n => Math.round(n * 100) / 100;
+const key = s => s.trim().replace(/\s+/g, ' ').toLowerCase();
+
+/* ---------- calculations ---------- */
+const paidOn = inv => r2(db.collections.reduce((s, c) => s + c.alloc.filter(a => a.inv === inv.id).reduce((x, a) => x + a.amt, 0), 0));
+const outstanding = inv => r2(inv.amount - paidOn(inv));
+const isOverdue = inv => outstanding(inv) > 0.004 && inv.due < today();
+function debtorsList() {
+  const m = new Map();
+  const get = name => { const k = key(name); if (!m.has(k)) m.set(k, { name: name.trim(), invoiced: 0, collected: 0, overdue: 0, open: 0 }); return m.get(k); };
+  db.invoices.forEach(i => { const d = get(i.debtor), o = outstanding(i); d.invoiced += i.amount; if (o > 0.004) { d.open++; if (i.due < today()) d.overdue += o; } });
+  db.collections.forEach(c => { get(c.debtor).collected += c.amount; });
+  return [...m.values()].map(d => ({ ...d, balance: r2(d.invoiced - d.collected), invoiced: r2(d.invoiced), collected: r2(d.collected), overdue: r2(d.overdue) })).sort((a, b) => b.balance - a.balance);
+}
+const openInvoices = name => db.invoices.filter(i => key(i.debtor) === key(name) && outstanding(i) > 0.004).sort((a, b) => a.date.localeCompare(b.date));
+
+/* ---------- navigation ---------- */
+let view = 'dash', currentDebtor = null;
+$('nav').onclick = e => { if (e.target.dataset.v) { currentDebtor = null; go(e.target.dataset.v); } };
+function go(v) {
+  view = v;
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+  document.querySelectorAll('main > section').forEach(s => s.classList.toggle('hide', s.id !== 'v-' + v));
+  render();
+}
+
+/* ---------- render ---------- */
+function render() {
+  const names = debtorsList().map(d => d.name);
+  $('debtorNames').innerHTML = names.map(n => `<option value="${esc(n)}">`).join('');
+  ({ dash: rDash, debtors: rDebtors, invoices: rInvoices, collect: rCollect, data: () => {} })[view]();
+}
+
+function rDash() {
+  const ds = debtorsList(), t = today();
+  const total = r2(ds.reduce((s, d) => s + Math.max(d.balance, 0), 0)), over = r2(ds.reduce((s, d) => s + d.overdue, 0));
+  const month = r2(db.collections.filter(c => c.date.slice(0, 7) === t.slice(0, 7)).reduce((s, c) => s + c.amount, 0));
+  $('kpis').innerHTML = [
+    ['Total outstanding', money(total)], ['Overdue', `<span class="${over ? 'bad' : ''}">${money(over)}</span>`],
+    ['Collected this month', money(month)], ['Debtors with balance', ds.filter(d => d.balance > 0.004).length]
+  ].map(([l, v]) => `<div class="card"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('');
+  const b = [['Not yet due', 0, '#16a34a'], ['1–30 days', 0, '#84cc16'], ['31–60 days', 0, '#d97706'], ['61–90 days', 0, '#ea580c'], ['90+ days', 0, '#dc2626']];
+  db.invoices.forEach(i => { const o = outstanding(i); if (o <= 0.004) return; const late = daysBetween(i.due, t); b[late <= 0 ? 0 : late <= 30 ? 1 : late <= 60 ? 2 : late <= 90 ? 3 : 4][1] += o; });
+  const sum = b.reduce((s, x) => s + x[1], 0);
+  $('ageBar').innerHTML = sum ? b.map(x => `<div title="${x[0]}: ${money(x[1])}" style="width:${x[1] / sum * 100}%;background:${x[2]}"></div>`).join('') : '';
+  $('ageLegend').innerHTML = b.map(x => `<span><i style="background:${x[2]}"></i>${x[0]}: <b>${money(r2(x[1]))}</b></span>`).join('');
+  $('topDebtors').innerHTML = ds.filter(d => d.balance > 0.004).slice(0, 10).map(d => `<tr class="click" data-d="${esc(d.name)}"><td>${esc(d.name)}</td><td class="n">${money(d.invoiced)}</td><td class="n">${money(d.collected)}</td><td class="n"><b>${money(d.balance)}</b></td><td class="n ${d.overdue ? 'bad' : ''}">${money(d.overdue)}</td></tr>`).join('') || '<tr><td colspan="5" class="note">No outstanding balances yet. Add invoices to get started.</td></tr>';
+}
+$('topDebtors').onclick = e => { const r = e.target.closest('tr[data-d]'); if (r) { currentDebtor = r.dataset.d; go('debtors'); } };
+
+function rDebtors() {
+  $('debtorList').classList.toggle('hide', !!currentDebtor);
+  $('debtorDetail').classList.toggle('hide', !currentDebtor);
+  if (currentDebtor) return rDetail();
+  const q = $('dSearch').value.toLowerCase(), only = $('dOpenOnly').checked;
+  $('debtorRows').innerHTML = debtorsList().filter(d => d.name.toLowerCase().includes(q) && (!only || Math.abs(d.balance) > 0.004)).map(d =>
+    `<tr class="click" data-d="${esc(d.name)}"><td>${esc(d.name)}</td><td class="n">${money(d.invoiced)}</td><td class="n">${money(d.collected)}</td><td class="n"><b>${money(d.balance)}</b></td><td class="n ${d.overdue ? 'bad' : ''}">${money(d.overdue)}</td><td class="n">${d.open}</td></tr>`).join('') || '<tr><td colspan="6" class="note">No debtors found.</td></tr>';
+}
+$('dSearch').oninput = $('dOpenOnly').onchange = rDebtors;
+$('debtorRows').onclick = e => { const r = e.target.closest('tr[data-d]'); if (r) { currentDebtor = r.dataset.d; rDebtors(); } };
+
+function rDetail() {
+  const d = debtorsList().find(x => key(x.name) === key(currentDebtor));
+  if (!d) { currentDebtor = null; return rDebtors(); }
+  const invs = db.invoices.filter(i => key(i.debtor) === key(d.name)).sort((a, b) => a.date.localeCompare(b.date));
+  const cols = db.collections.filter(c => key(c.debtor) === key(d.name)).sort((a, b) => a.date.localeCompare(b.date));
+  const ledger = [...invs.map(i => ({ date: i.date, t: 'Invoice ' + i.no, dr: i.amount, cr: 0 })), ...cols.map(c => ({ date: c.date, t: 'Payment – ' + c.method + (c.ref ? ' (' + c.ref + ')' : ''), dr: 0, cr: c.amount }))].sort((a, b) => a.date.localeCompare(b.date));
+  let run = 0;
+  $('debtorDetail').innerHTML = `
+    <div class="toolbar"><button class="btn sec" id="back">← All debtors</button><button class="btn" id="payNow">Record collection</button></div>
+    <h2 style="font-size:20px">${esc(d.name)}</h2>
+    <div class="cards">
+      <div class="card"><div class="label">Balance owing</div><div class="value">${money(d.balance)}</div></div>
+      <div class="card"><div class="label">Overdue</div><div class="value ${d.overdue ? 'bad' : ''}">${money(d.overdue)}</div></div>
+      <div class="card"><div class="label">Total invoiced</div><div class="value">${money(d.invoiced)}</div></div>
+      <div class="card"><div class="label">Total collected</div><div class="value">${money(d.collected)}</div></div>
+    </div>
+    <div class="panel"><h2>Invoice details</h2>${invTable(invs, false)}</div>
+    <div class="panel"><h2>Statement (running balance)</h2><table><thead><tr><th>Date</th><th>Description</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Balance</th></tr></thead><tbody>
+      ${ledger.map(l => { run = r2(run + l.dr - l.cr); return `<tr><td>${l.date}</td><td>${esc(l.t)}</td><td class="n">${l.dr ? money(l.dr) : ''}</td><td class="n">${l.cr ? money(l.cr) : ''}</td><td class="n">${money(run)}</td></tr>`; }).join('')}
+    </tbody></table></div>`;
+  $('back').onclick = () => { currentDebtor = null; rDebtors(); };
+  $('payNow').onclick = () => { go('collect'); $('cDebtor').value = d.name; fillAlloc(); };
+  bindInvTable($('debtorDetail'));
+}
+
+function invTable(list, showDebtor = true) {
+  const t = today();
+  return `<table><thead><tr><th>Date</th><th>Invoice</th>${showDebtor ? '<th>Debtor</th>' : ''}<th>Due</th><th class="n">Amount</th><th class="n">Paid</th><th class="n">Outstanding</th><th>Status</th><th>PDF</th><th></th></tr></thead><tbody>` +
+    (list.map(i => {
+      const o = outstanding(i), st = o <= 0.004 ? '<span class="tag t-ok">Paid</span>' : i.due < t ? `<span class="tag t-bad">Overdue ${daysBetween(i.due, t)}d</span>` : o < i.amount ? '<span class="tag t-warn">Part paid</span>' : '<span class="tag t-warn">Open</span>';
+      return `<tr><td>${i.date}</td><td>${esc(i.no)}</td>${showDebtor ? `<td>${esc(i.debtor)}</td>` : ''}<td>${i.due}</td><td class="n">${money(i.amount)}</td><td class="n">${money(i.amount - o)}</td><td class="n"><b>${money(o)}</b></td><td>${st}</td><td>${i.hasPdf ? `<button class="link" data-pdf="${i.id}">View</button>` : '–'}</td><td><button class="btn del" data-del="${i.id}">Delete</button></td></tr>` +
+        (i.items && i.items.length ? `<tr><td></td><td colspan="9" class="note" style="white-space:normal;margin:0">Items: ${i.items.map(x => `${esc(x.desc)}${x.qty ? ' × ' + esc(x.qty) : ''} = ${money(x.amt)}`).join(' · ')}</td></tr>` : '');
+    }).join('') || `<tr><td colspan="10" class="note">No invoices.</td></tr>`) + '</tbody></table>';
+}
+function bindInvTable(root) {
+  root.onclick = async e => {
+    const p = e.target.dataset.pdf, d = e.target.dataset.del;
+    if (p) { const b = await pdfStore.get(p); if (b) window.open(URL.createObjectURL(b), '_blank'); else alert('PDF not found in this browser.'); }
+    if (d && confirm('Delete this invoice? Payments applied to it become unapplied credit.')) {
+      db.collections.forEach(c => c.alloc = c.alloc.filter(a => a.inv !== d));
+      db.invoices = db.invoices.filter(i => i.id !== d); pdfStore.del(d); save(); render();
+    }
+  };
+}
+
+/* ---------- invoices ---------- */
+function rInvoices() {
+  const q = $('iSearch').value.toLowerCase(), f = $('iFilter').value;
+  const list = db.invoices.filter(i => (i.no + ' ' + i.debtor).toLowerCase().includes(q) && (f === 'all' || (f === 'open' && outstanding(i) > 0.004) || (f === 'overdue' && isOverdue(i)) || (f === 'paid' && outstanding(i) <= 0.004)))
+    .sort((a, b) => b.date.localeCompare(a.date));
+  $('invTable').innerHTML = invTable(list);
+  bindInvTable($('invTable'));
+}
+$('iSearch').oninput = $('iFilter').onchange = () => { rInvoices(); };
+
+let queue = [], curFile = null;
+const setDue = () => { if ($('iDate').value) $('iDue').value = addDays($('iDate').value, +$('iTerms').value || 0); };
+$('iDate').onchange = $('iTerms').oninput = setDue;
+$('iDate').value = today(); setDue();
+
+const drop = $('drop');
+drop.onclick = () => $('pdfIn').click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); addFiles(e.dataTransfer.files); };
+$('pdfIn').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
+function addFiles(files) { queue.push(...[...files].filter(f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name))); if (!curFile) nextFile(); }
+
+/* ----- items editor ----- */
+let curItems = [];
+function renderItems() {
+  $('itemRows').innerHTML = curItems.map((it, n) => `<tr>
+    <td><input data-n="${n}" data-f="desc" value="${esc(it.desc)}" style="min-width:260px"></td>
+    <td class="n"><input data-n="${n}" data-f="qty" value="${esc(it.qty ?? '')}" style="width:80px;text-align:right"></td>
+    <td class="n"><input data-n="${n}" data-f="price" value="${esc(it.price ?? '')}" style="width:110px;text-align:right"></td>
+    <td class="n"><input data-n="${n}" data-f="amt" value="${esc(it.amt ?? '')}" style="width:110px;text-align:right"></td>
+    <td><button type="button" class="btn del" data-rm="${n}">✕</button></td></tr>`).join('') || '<tr><td colspan="5" class="note">No items (optional).</td></tr>';
+  const s = itemsSum();
+  $('itemsTotal').textContent = curItems.length ? `— items total ${money(s)}` + (+$('iAmt').value && Math.abs(s - $('iAmt').value) > 0.009 ? ' (differs from invoice amount: may include tax/rounding)' : '') : '';
+}
+const itemsSum = () => r2(curItems.reduce((s, i) => s + (parseFloat(String(i.amt).replace(/,/g, '')) || 0), 0));
+$('itemRows').oninput = e => { const d = e.target.dataset; if (d.f) { curItems[d.n][d.f] = e.target.value; const s = itemsSum(); $('itemsTotal').textContent = `— items total ${money(s)}`; } };
+$('itemRows').onclick = e => { if (e.target.dataset.rm !== undefined) { curItems.splice(+e.target.dataset.rm, 1); renderItems(); } };
+$('addItem').onclick = () => { curItems.push({ desc: '', qty: '', price: '', amt: '' }); renderItems(); };
+$('useTotal').onclick = () => { $('iAmt').value = itemsSum().toFixed(2); renderItems(); };
+$('iAmt').oninput = renderItems;
+renderItems();
+
+function resetInvForm() { $('invForm').reset(); $('iDate').value = today(); $('iTerms').value = 30; setDue(); curItems = []; renderItems(); $('rawText').textContent = ''; }
+
+/* ----- PDF reading ----- */
+async function nextFile() {
+  curFile = queue.shift() || null;
+  $('iFile').value = curFile ? curFile.name : '(none – manual entry)';
+  if (!curFile) { $('queueNote').textContent = ''; return; }
+  const tag = `Reading "${curFile.name}"${queue.length ? ` (${queue.length} more waiting)` : ''}`;
+  $('queueNote').textContent = tag + '…';
+  const g = await guessFromPdf(curFile, m => $('queueNote').textContent = tag + ' — ' + m);
+  $('rawText').textContent = g.raw || '';
+  if (g.no) $('iNo').value = g.no;
+  if (g.date) $('iDate').value = g.date;
+  if (g.terms != null) $('iTerms').value = g.terms;
+  setDue();
+  if (g.due) $('iDue').value = g.due;
+  if (g.amount) $('iAmt').value = g.amount;
+  if (g.debtor) $('iDebtor').value = g.debtor;
+  curItems = g.items || []; renderItems();
+  const found = [g.debtor && 'debtor', g.no && 'invoice no.', g.date && 'date', g.amount && 'amount', curItems.length && curItems.length + ' item(s)'].filter(Boolean);
+  const missing = ['debtor', 'invoice no.', 'date', 'amount'].filter(x => !found.includes(x));
+  $('queueNote').textContent = `"${curFile.name}"${queue.length ? ` (${queue.length} more waiting)` : ''}: found ${found.join(', ') || 'nothing'}.` + (missing.length ? ` Please fill in: ${missing.join(', ')}.` : '') + ' Check everything, then Save.';
+  $('iDebtor').focus();
+}
+$('iSkip').onclick = () => { resetInvForm(); nextFile(); };
+
+const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+function parseDate(s) {   // dd/mm/yyyy (day first), yyyy-mm-dd, 1 Jul 2026, Jul 1, 2026
+  const p = (y, m, d) => { y = +y; if (y < 100) y += 2000; return +m >= 1 && +m <= 12 && +d >= 1 && +d <= 31 ? `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}` : null; };
+  let m;
+  if ((m = s.match(/\b(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})\b/))) return p(m[1], m[2], m[3]);
+  if ((m = s.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\b/))) return p(m[3], m[2], m[1]);
+  if ((m = s.match(/\b(\d{1,2})(?:st|nd|rd|th)?[\s\-]+([A-Za-z]{3})[a-z]*\.?,?[\s\-]+(\d{4})\b/)) && MONTHS[m[2].toLowerCase()]) return p(m[3], MONTHS[m[2].toLowerCase()], m[1]);
+  if ((m = s.match(/\b([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b/)) && MONTHS[m[1].toLowerCase()]) return p(m[3], MONTHS[m[1].toLowerCase()], m[2]);
+  return null;
+}
+const isNum = t => /^\(?-?(?:RM|\$)?[\d,]*\d(\.\d+)?\)?$/i.test(t);
+const toNum = t => parseFloat(t.replace(/[^\d.\-]/g, '')) || 0;
+
+// Turn pdf.js text items into lines of cells {x, s}, top to bottom, cells left to right.
+function buildLines(items) {
+  const rows = [];
+  items.filter(i => i.str.trim()).sort((a, b) => b.transform[5] - a.transform[5] || a.transform[4] - b.transform[4]).forEach(i => {
+    const y = i.transform[5], row = rows.find(r => Math.abs(r.y - y) < 3);
+    (row || rows[rows.push({ y, it: [] }) - 1]).it.push(i);
+  });
+  return rows.map(r => {
+    const cells = []; let prevEnd = null;
+    r.it.sort((a, b) => a.transform[4] - b.transform[4]).forEach(i => {
+      const x = i.transform[4];
+      if (cells.length && x - prevEnd < 12) cells[cells.length - 1].s += (x - prevEnd > 1.5 ? ' ' : '') + i.str.trim();
+      else cells.push({ x, s: i.str.trim() });
+      prevEnd = x + i.width;
+    });
+    return cells;
+  });
+}
+
+function parseInvoice(lines) {
+  const out = {}, L = lines.map(c => c.map(x => x.s).join('  ')), text = L.join('\n');
+  const flat = L.map(s => s.replace(/\s+/g, ' '));
+  const all = flat.join(' | ');
+
+  out.no = (all.match(/invoice\s*(?:no\.?|number|#|num)\s*[:.]?\s*([A-Z0-9][A-Z0-9\-\/]{1,})/i) || all.match(/\binv(?:oice)?\s*[:.\-#]\s*([A-Z0-9][A-Z0-9\-\/]{2,})/i)
+    || all.match(/\binvoice\s*[^\w\s]{0,2}\s*([A-Z0-9][A-Z0-9\-\/]*\d[A-Z0-9\-\/]*)/i) || [])[1];
+  const dl = flat.find(l => /invoice\s*date|date\s*of\s*issue|^date\b|\bdate\s*[:.]/i.test(l) && !/due/i.test(l.split(/date/i)[0]));
+  out.date = (dl && parseDate(dl.replace(/.*?date/i, ''))) || parseDate(all);
+  const dueL = flat.find(l => /due\s*date|payment\s*due|due\s*on/i.test(l));
+  if (dueL) out.due = parseDate(dueL.replace(/.*?due/i, ''));
+  const tm = all.match(/(?:terms?|credit)\s*[:.]?\s*(?:net\s*)?(\d{1,3})\s*days?/i) || all.match(/\bnet\s*(\d{1,3})\b/i);
+  if (tm) out.terms = +tm[1];
+  else if (/terms?\s*[:.]?\s*(?:cash|c\.?o\.?d|immediate)/i.test(all)) out.terms = 0;
+  if (out.due && out.date && out.terms == null) out.terms = Math.max(0, daysBetween(out.date, out.due));
+  if (out.due && out.date && out.terms != null && addDays(out.date, out.terms) !== out.due) out.terms = Math.max(0, daysBetween(out.date, out.due));
+
+  // debtor: value beside or below a "Bill To / Customer / Sold To" label
+  const lab = /^(?:bill(?:ed)?\s*to|sold\s*to|invoice\s*to|customer(?:\s*name)?|debtor|buyer|client)\s*[:.]?\s*(.*)$/i;
+  const labelish = /^(?:tel|fax|e-?mail|ref|your ref|our ref|attn|date|page|terms)\b|:\s*$/i;
+  outer: for (let r = 0; r < lines.length; r++) {
+    for (const cell of lines[r]) {
+      const m = cell.s.match(lab); if (!m) continue;
+      if (m[1] && !/^[:.\-]?$/.test(m[1]) && /[A-Za-z]{2}/.test(m[1])) { out.debtor = m[1].trim(); break outer; }
+      for (let n = r + 1; n < Math.min(r + 4, lines.length); n++) {   // same column on the next lines
+        const c = lines[n].find(x => Math.abs(x.x - cell.x) < 40 && /[A-Za-z]{3}/.test(x.s) && !lab.test(x.s) && !labelish.test(x.s));
+        if (c) { out.debtor = c.s.trim(); break outer; }
+      }
+    }
+  }
+  if (!out.debtor) {   // no label: first company-looking name near the top (e.g. "PENG WEI SDN. BHD.")
+    const co = /\b(?:sdn\.?\s*bhd\.?|bhd\.?|berhad|enterprise|trading|plt|llp|ltd\.?|inc\.?|corp\.?|resources|industries|holdings)(?=\W|$)/i;
+    for (const row of lines.slice(0, 25)) {
+      const c = row.find(x => co.test(x.s) && !/sst|tin\s*no|reg\s*no|@|bank|payable/i.test(x.s));
+      if (c) { out.debtor = c.s.split(/\s*[:©@]|\s+invoice\b|\s+(?:your|our)\s+ref/i)[0].trim(); break; }
+    }
+  }
+  if (out.debtor) out.debtor = out.debtor.replace(/^[:\-\s]+/, '').replace(/\s{2,}.*$/, '').trim();
+
+  // items between the table header and the totals
+  const hdr = flat.findIndex(l => /(description|item|particulars|product)/i.test(l) && /(qty|quantity|price|amount|total|rate)/i.test(l));
+  const stop = /^(sub\s*-?\s*total|gross|ringgit|malaysian\s*ringgit|total|grand\s*total|amount\s*due|balance|rounding|net\s*total|service\s*tax|sst|gst|tax|discount|payment|bank|remarks?|note)/i;
+  const items = [];
+  if (hdr >= 0) {
+    for (let r = hdr + 1; r < flat.length; r++) {
+      const line = flat[r]; if (stop.test(line)) break;
+      const tok = line.split(' '), money2 = /^\(?-?\d{1,3}(?:,\d{3})*\.\d{2}\)?$|^\d+\.\d{2}$/;
+      if (!money2.test(tok[tok.length - 1])) {   // no amount at the end: wrapped description line or noise
+        if (items.length && /[A-Za-z]/.test(line) && !/page\s*\d/i.test(line)) items[items.length - 1].desc += ' ' + line.trim();
+        continue;
+      }
+      const amt = toNum(tok.pop()), tail = []; let unit = false;
+      while (tok.length > 1 && tail.length < 2) {
+        const t = tok[tok.length - 1];
+        if (isNum(t)) tail.unshift(tok.pop());
+        else if (!unit && !tail.length && /^[A-Za-z]{2,6}\.?$/.test(t) && isNum(tok[tok.length - 2])) { tok.pop(); unit = true; }
+        else break;
+      }
+      const desc = tok.join(' ').replace(/^\d{1,3}[.)]?\s+(?=[A-Za-z])/, '').trim();
+      if (!desc) continue;
+      const it = { desc, qty: '', price: '', amt: amt.toFixed(2) };
+      if (tail.length === 2) { it.qty = tail[0]; it.price = tail[1]; } else if (tail.length === 1) it.qty = tail[0];
+      items.push(it);
+    }
+  }
+  out.items = items;
+
+  const tot = [...all.matchAll(/(?:grand\s*total|total\s*(?:amount|due|payable|incl[a-z.]*)?|amount\s*due|balance\s*due|net\s*total)\s*(?:\([A-Z]{2,3}\))?\s*[:\-]?\s*(?:[A-Z]{2,3}\s*|\$\s*)?([\d,]+\.\d{2})/gi)];
+  if (tot.length) out.amount = tot[tot.length - 1][1].replace(/,/g, '');
+  else if (items.length) out.amount = items.reduce((s, i) => s + +i.amt, 0).toFixed(2);
+
+  const known = debtorsList().map(x => x.name).filter(n => n.length > 2).find(n => all.toLowerCase().includes(n.toLowerCase()));
+  if (known) out.debtor = known;
+  out.raw = text;
+  return out;
+}
+
+async function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); }); }
+
+async function guessFromPdf(file, status = () => {}) {
+  try {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+    let lines = [];
+    for (let p = 1; p <= Math.min(pdf.numPages, 4); p++) lines.push(...buildLines((await (await pdf.getPage(p)).getTextContent()).items));
+    if (lines.flat().map(c => c.s).join('').length < 30) {   // scanned: OCR
+      status('no text layer, running OCR (first time takes a while)…');
+      if (!window.Tesseract) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.0.5/tesseract.min.js');
+      lines = [];
+      for (let p = 1; p <= Math.min(pdf.numPages, 2); p++) {
+        const page = await pdf.getPage(p), vp = page.getViewport({ scale: 2.2 }), cv = document.createElement('canvas');
+        cv.width = vp.width; cv.height = vp.height;
+        await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+        const { data } = await Tesseract.recognize(cv, 'eng', { logger: m => m.status === 'recognizing text' && status(`OCR page ${p} ${Math.round(m.progress * 100)}%`) });
+        data.text.split('\n').filter(s => s.trim()).forEach(s => lines.push([{ x: 0, s: s.trim().replace(/\s{2,}/g, ' ') }]));
+      }
+    }
+    return parseInvoice(lines);
+  } catch (e) { console.warn('PDF read failed', e); return {}; }
+}
+
+$('invForm').onsubmit = async e => {
+  e.preventDefault();
+  const no = $('iNo').value.trim(), debtor = $('iDebtor').value.trim().replace(/\s+/g, ' ');
+  const existing = db.invoices.find(i => key(i.debtor) === key(debtor) && i.no.toLowerCase() === no.toLowerCase());
+  if (existing && !confirm(`Invoice ${no} already exists for ${debtor}. Add anyway?`)) return;
+  const known = debtorsList().find(d => key(d.name) === key(debtor));
+  const inv = { id: uid(), debtor: known ? known.name : debtor, no, date: $('iDate').value, due: $('iDue').value, amount: r2(+$('iAmt').value), hasPdf: !!curFile, items: curItems.filter(i => i.desc.trim() || +i.amt).map(i => ({ desc: i.desc.trim(), qty: String(i.qty).trim(), price: String(i.price).trim(), amt: r2(parseFloat(String(i.amt).replace(/,/g, '')) || 0) })) };
+  if (curFile) await pdfStore.put(inv.id, curFile);
+  db.invoices.push(inv); save();
+  resetInvForm();
+  await nextFile(); render();
+};
+
+/* ---------- collections ---------- */
+function rCollect() {
+  const cur = $('cDebtor').value;
+  $('cDebtor').innerHTML = '<option value="">— select debtor —</option>' + debtorsList().map(d => `<option value="${esc(d.name)}">${esc(d.name)} (balance ${money(d.balance)})</option>`).join('');
+  $('cDebtor').value = cur;
+  if (!$('cDate').value) $('cDate').value = today();
+  fillAlloc();
+  $('colRows').innerHTML = [...db.collections].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 50).map(c => {
+    const un = r2(c.amount - c.alloc.reduce((s, a) => s + a.amt, 0));
+    const ap = c.alloc.map(a => { const i = db.invoices.find(x => x.id === a.inv); return i ? `${esc(i.no)} (${money(a.amt)})` : ''; }).filter(Boolean).join(', ');
+    return `<tr><td>${c.date}</td><td>${esc(c.debtor)}</td><td>${esc(c.method)}</td><td>${esc(c.ref)}</td><td class="n">${money(c.amount)}</td><td style="white-space:normal">${ap}${un > 0.004 ? ` <span class="tag t-warn">Unapplied ${money(un)}</span>` : ''}</td><td><button class="btn del" data-cdel="${c.id}">Delete</button></td></tr>`;
+  }).join('') || '<tr><td colspan="7" class="note">No collections recorded yet.</td></tr>';
+}
+$('colRows').onclick = e => { const id = e.target.dataset.cdel; if (id && confirm('Delete this collection? The debtor balance will increase again.')) { db.collections = db.collections.filter(c => c.id !== id); save(); render(); } };
+
+function fillAlloc() {
+  const name = $('cDebtor').value, invs = name ? openInvoices(name) : [];
+  $('allocRows').innerHTML = invs.length ? invs.map(i => `<tr><td>${esc(i.no)} <span class="note">(${i.date})</span></td><td>${i.due}</td><td class="n">${money(outstanding(i))}</td><td class="n"><input class="alloc" data-inv="${i.id}" data-max="${outstanding(i)}" type="number" step="0.01" min="0" style="width:130px;text-align:right"></td></tr>`).join('')
+    : `<tr><td colspan="4" class="note">${name ? 'No outstanding invoices for this debtor.' : 'Choose a debtor.'}</td></tr>`;
+  autoAlloc();
+}
+function autoAlloc() {
+  let left = +$('cAmt').value || 0;
+  document.querySelectorAll('.alloc').forEach(el => { const a = Math.min(left, +el.dataset.max); el.value = a > 0 ? r2(a).toFixed(2) : ''; left = r2(left - a); });
+  updateNote();
+}
+function updateNote() {
+  const amt = +$('cAmt').value || 0, applied = r2([...document.querySelectorAll('.alloc')].reduce((s, e) => s + (+e.value || 0), 0));
+  const un = r2(amt - applied);
+  $('allocNote').innerHTML = un > 0.004 ? `<span class="bad">${money(un)} will be kept as unapplied credit</span> (e.g. advance payment).` : un < -0.004 ? `<span class="bad">Applied amount exceeds amount received by ${money(-un)}.</span>` : 'Fully applied. Amount auto-fills oldest invoice first; edit "Apply" to change.';
+}
+$('cDebtor').onchange = fillAlloc;
+$('cAmt').oninput = autoAlloc;
+$('allocRows').oninput = e => { if (e.target.classList.contains('alloc')) updateNote(); };
+$('colForm').onsubmit = e => {
+  e.preventDefault();
+  const amt = r2(+$('cAmt').value), alloc = [...document.querySelectorAll('.alloc')].map(el => ({ inv: el.dataset.inv, amt: r2(+el.value || 0), max: +el.dataset.max })).filter(a => a.amt > 0);
+  if (alloc.some(a => a.amt > a.max + 0.004)) return alert('An applied amount is more than the invoice outstanding.');
+  if (r2(alloc.reduce((s, a) => s + a.amt, 0)) > amt + 0.004) return alert('Applied amount exceeds the amount received.');
+  db.collections.push({ id: uid(), debtor: $('cDebtor').value, date: $('cDate').value, amount: amt, method: $('cMethod').value, ref: $('cRef').value.trim(), alloc: alloc.map(({ inv, amt }) => ({ inv, amt })) });
+  save(); $('cAmt').value = ''; $('cRef').value = ''; render();
+};
+
+/* ---------- backup / export ---------- */
+function download(name, text, type) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click(); }
+const csv = rows => rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+$('bkJson').onclick = () => download(`debtors-backup-${today()}.json`, JSON.stringify(db), 'application/json');
+$('bkCsv').onclick = () => download(`debtor-balances-${today()}.csv`, csv([['Debtor', 'Invoiced', 'Collected', 'Balance', 'Overdue'], ...debtorsList().map(d => [d.name, d.invoiced, d.collected, d.balance, d.overdue])]), 'text/csv');
+$('bkInv').onclick = () => download(`invoices-${today()}.csv`, csv([['Date', 'Invoice', 'Debtor', 'Due', 'Amount', 'Paid', 'Outstanding'], ...db.invoices.map(i => [i.date, i.no, i.debtor, i.due, i.amount, r2(i.amount - outstanding(i)), outstanding(i)])]), 'text/csv');
+$('restore').onchange = async e => {
+  try { const d = JSON.parse(await e.target.files[0].text()); if (!Array.isArray(d.invoices) || !Array.isArray(d.collections)) throw 0; if (!confirm('Replace all current data with this backup?')) return; db = d; save(); alert('Restored.'); go('dash'); }
+  catch { alert('Not a valid backup file.'); }
+};
+
+render();
+</script>
+</body>
+</html>
