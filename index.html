@@ -53,9 +53,27 @@
   .hide { display:none; }
   .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
   .toolbar input { max-width:260px; }
+  .locked header, .locked main { display:none; }
+  #login { display:none; min-height:100vh; align-items:center; justify-content:center; padding:16px; }
+  .locked #login { display:flex; }
+  #login .box { width:100%; max-width:360px; background:var(--card); border:1px solid var(--border); border-radius:12px; padding:24px; }
+  #login h1 { margin-bottom:4px; } #login p.sub { color:var(--muted); font-size:14px; margin:0 0 16px; }
+  #login .f { margin-bottom:12px; } #login .msg { min-height:20px; font-size:13px; color:var(--bad); margin-bottom:8px; }
 </style>
 </head>
-<body>
+<body class="locked">
+<div id="login">
+  <form class="box" id="loginForm" autocomplete="on">
+    <h1>Debtor Management</h1>
+    <p class="sub" id="loginSub">Sign in to continue</p>
+    <div class="f"><label for="lUser">Username</label><input id="lUser" autocomplete="username" required></div>
+    <div class="f"><label for="lPass">Password</label><input id="lPass" type="password" autocomplete="current-password" required></div>
+    <div class="f hide" id="lConfWrap"><label for="lConf">Confirm password</label><input id="lConf" type="password" autocomplete="new-password"></div>
+    <div class="msg" id="loginMsg"></div>
+    <button class="btn" style="width:100%" id="loginBtn">Sign in</button>
+    <p class="note" style="text-align:center"><button type="button" class="link" id="forgot">Forgot password?</button></p>
+  </form>
+</div>
 <header>
   <h1>Debtor Management</h1>
   <nav id="nav">
@@ -65,6 +83,7 @@
     <button data-v="collect">Record Collection</button>
     <button data-v="data">Backup</button>
   </nav>
+  <button class="btn sec" id="logout">Sign out</button>
 </header>
 <main>
 
@@ -155,6 +174,15 @@
     <p><button class="btn" id="bkJson">Download backup (JSON)</button> <button class="btn sec" id="bkCsv">Export debtor balances (CSV)</button>
     <button class="btn sec" id="bkInv">Export invoices (CSV)</button></p>
     <p><label>Restore from backup (replaces current data; PDFs are not included in the backup)</label><input type="file" id="restore" accept=".json"></p>
+  </div>
+  <div class="panel">
+    <h2>Change password</h2>
+    <form id="pwForm" class="form">
+      <div><label>Current password</label><input id="pwOld" type="password" autocomplete="current-password" required></div>
+      <div><label>New password (min 6 characters)</label><input id="pwNew" type="password" autocomplete="new-password" minlength="6" required></div>
+      <div><button class="btn">Change password</button></div>
+    </form>
+    <p class="note" id="pwMsg"></p>
   </div>
 </section>
 </main>
@@ -557,7 +585,58 @@ $('restore').onchange = async e => {
   catch { alert('Not a valid backup file.'); }
 };
 
+/* ---------- login (local, this browser only) ---------- */
+const AUTH_KEY = 'debtor-auth-v1', SESSION_KEY = 'debtor-session';
+const getAuth = () => { try { return JSON.parse(localStorage.getItem(AUTH_KEY)); } catch { return null; } };
+const toHex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+async function hashPw(pw, saltHex) {
+  const salt = Uint8Array.from(saltHex.match(/../g).map(h => parseInt(h, 16)));
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveBits']);
+  return toHex(await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: 150000, hash: 'SHA-256' }, key, 256));
+}
+const newSalt = () => toHex(crypto.getRandomValues(new Uint8Array(16)));
+const unlocked = () => { try { return sessionStorage.getItem(SESSION_KEY) === '1'; } catch { return false; } };
+function showLogin() {
+  const setup = !getAuth();
+  document.body.classList.add('locked');
+  $('loginSub').textContent = setup ? 'First time here: create your username and password' : 'Sign in to continue';
+  $('loginBtn').textContent = setup ? 'Create login' : 'Sign in';
+  $('lConfWrap').classList.toggle('hide', !setup); $('lConf').required = setup;
+  $('lPass').autocomplete = setup ? 'new-password' : 'current-password';
+  $('forgot').classList.toggle('hide', setup);
+  $('loginMsg').textContent = window.crypto && crypto.subtle ? '' : 'This browser cannot run secure login. Open the app over https or in Chrome/Edge.';
+}
+function unlock() { try { sessionStorage.setItem(SESSION_KEY, '1'); } catch {} document.body.classList.remove('locked'); $('lPass').value = $('lConf').value = ''; render(); }
+$('loginForm').onsubmit = async e => {
+  e.preventDefault(); const msg = $('loginMsg'); msg.textContent = '';
+  if (!(window.crypto && crypto.subtle)) return showLogin();
+  const user = $('lUser').value.trim(), pw = $('lPass').value, a = getAuth();
+  if (!a) {
+    if (pw.length < 6) return msg.textContent = 'Password must be at least 6 characters.';
+    if (pw !== $('lConf').value) return msg.textContent = 'Passwords do not match.';
+    const salt = newSalt();
+    try { localStorage.setItem(AUTH_KEY, JSON.stringify({ user, salt, hash: await hashPw(pw, salt) })); } catch { return msg.textContent = 'Could not save login in this browser.'; }
+    return unlock();
+  }
+  if (user.toLowerCase() === a.user.toLowerCase() && await hashPw(pw, a.salt) === a.hash) return unlock();
+  msg.textContent = 'Wrong username or password.'; $('lPass').value = '';
+};
+$('logout').onclick = () => { try { sessionStorage.removeItem(SESSION_KEY); } catch {} go('dash'); showLogin(); };
+$('forgot').onclick = () => {
+  if (!confirm('There is no way to recover a forgotten password. Resetting it ERASES ALL invoices and collections in this browser (unless you saved a backup file). Continue?')) return;
+  if (!confirm('Last check: erase all data and reset the login?')) return;
+  localStorage.removeItem(AUTH_KEY); localStorage.removeItem(KEY); sessionStorage.removeItem(SESSION_KEY);
+  indexedDB.deleteDatabase('debtor-pdfs'); db = { invoices: [], collections: [] }; $('lUser').value = ''; showLogin();
+};
+$('pwForm').onsubmit = async e => {
+  e.preventDefault(); const a = getAuth(), m = $('pwMsg');
+  if (!a || await hashPw($('pwOld').value, a.salt) !== a.hash) return m.textContent = 'Current password is wrong.';
+  const salt = newSalt(); localStorage.setItem(AUTH_KEY, JSON.stringify({ user: a.user, salt, hash: await hashPw($('pwNew').value, salt) }));
+  $('pwForm').reset(); m.textContent = 'Password changed.';
+};
+
 render();
+if (unlocked() && getAuth()) document.body.classList.remove('locked'); else showLogin();
 </script>
 </body>
 </html>
